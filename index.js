@@ -44,9 +44,7 @@ async function getVideoDuration(inputPath) {
     });
   });
 }
-const ffmpeg = require('fluent-ffmpeg');
-const { exec } = require('child_process');
-const path = require('path');
+
 
 async function getVideoInfo(inputPath) {
   return new Promise((resolve, reject) => {
