@@ -169,39 +169,52 @@ function getVideoDuration(filePath) {
   });
 }
 
-function processVideoWithFFmpeg(inputPath, outputDir, duration) {
-  return new Promise((resolve, reject) => {
-    // For shorter videos (less than 5 minutes), use shorter segments
-    const segmentDuration = duration < 300 ? 2 : 4;
-    
-    // Create optimized HLS with multiple quality levels for slower connections
-    const ffmpegCommand = `ffmpeg -i "${inputPath}" \
-      -preset slow -g 48 -sc_threshold 0 \
-      -map 0:v:0 -map 0:a:0? -map 0:v:0 -map 0:a:0? -map 0:v:0 -map 0:a:0? \
-      -b:v:0 400k -c:v:0 libx264 -filter:v:0 "scale=480:trunc(ow/a/2)*2" \
-      -b:v:1 1000k -c:v:1 libx264 -filter:v:1 "scale=720:trunc(ow/a/2)*2" \
-      -b:v:2 2000k -c:v:2 libx264 -filter:v:2 "scale=1080:trunc(ow/a/2)*2" \
-      -c:a aac -b:a 96k -ac 2 \
-      -var_stream_map "v:0,a:0 v:1,a:1 v:2,a:2" \
-      -master_pl_name master.m3u8 \
-      -f hls -hls_time ${segmentDuration} -hls_list_size 0 \
-      -hls_segment_filename "${outputDir}/%v_segment%d.ts" \
-      "${outputDir}/%v.m3u8"`;
-    
-    console.log('Executing FFmpeg command...');
-    
-    exec(ffmpegCommand, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`FFmpeg error: ${error.message}`);
-        console.error(`FFmpeg stderr: ${stderr}`);
-        return reject(error);
-      }
-      
-      console.log('FFmpeg processing complete');
-      resolve();
+async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
+    return new Promise((resolve, reject) => {
+      const segmentDuration = duration < 300 ? 2 : 4;
+  
+      // Check if audio exists using ffprobe
+      const ffprobeCommand = `ffprobe -v error -show_streams -select_streams a -of json "${inputPath}"`;
+      exec(ffprobeCommand, (error, stdout) => {
+        const hasAudio = !error && JSON.parse(stdout).streams.length > 0;
+  
+        let ffmpegCommand = `ffmpeg -i "${inputPath}" \
+          -preset slow -g 48 -sc_threshold 0 \
+          -map 0:v:0 -map 0:v:0 -map 0:v:0 \
+          -b:v:0 400k -c:v:0 libx264 -filter:v:0 "scale=480:trunc(ow/a/2)*2" \
+          -b:v:1 1000k -c:v:1 libx264 -filter:v:1 "scale=720:trunc(ow/a/2)*2" \
+          -b:v:2 2000k -c:v:2 libx264 -filter:v:2 "scale=1080:trunc(ow/a/2)*2"`;
+  
+        if (hasAudio) {
+          ffmpegCommand += ` \
+            -map 0:a:0? \
+            -c:a aac -b:a 96k -ac 2 \
+            -var_stream_map "v:0,a:0 v:1,a:0 v:2,a:0"`;
+        } else {
+          ffmpegCommand += ` \
+            -var_stream_map "v:0 v:1 v:2"`;
+        }
+  
+        ffmpegCommand += ` \
+          -master_pl_name master.m3u8 \
+          -f hls -hls_time ${segmentDuration} -hls_list_size 0 \
+          -hls_segment_filename "${outputDir}/%v_segment%d.ts" \
+          "${outputDir}/%v.m3u8"`;
+  
+        console.log('Executing FFmpeg command:', ffmpegCommand);
+  
+        exec(ffmpegCommand, (error, stdout, stderr) => {
+          if (error) {
+            console.error('FFmpeg error:', error.message);
+            console.error('FFmpeg stderr:', stderr);
+            return reject(error);
+          }
+          console.log('FFmpeg processing complete');
+          resolve();
+        });
+      });
     });
-  });
-}
+  }
 
 async function uploadProcessedFilesToMinIO(directory, bucket, prefix) {
   const files = fs.readdirSync(directory);
