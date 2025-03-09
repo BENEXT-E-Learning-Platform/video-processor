@@ -44,7 +44,6 @@ async function getVideoDuration(inputPath) {
     });
   });
 }
-
 async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
     const segmentDuration = duration < 300 ? 2 : 4;
     const outputMaster = path.join(outputDir, 'master.m3u8');
@@ -56,45 +55,36 @@ async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
           '-g 48',
           '-sc_threshold 0',
         ])
-        // Video variants
         .videoCodec('libx264')
         .addOutputOptions([
-          '-map 0:v:0', // First video stream
-          '-b:v:0 400k',
-          '-filter:v:0 scale=480:trunc(ow/a/2)*2',
-          '-map 0:v:0', // Second video stream
-          '-b:v:1 1000k',
-          '-filter:v:1 scale=720:trunc(ow/a/2)*2',
-          '-map 0:v:0', // Third video stream
-          '-b:v:2 2000k',
-          '-filter:v:2 scale=1080:trunc(ow/a/2)*2',
+          '-map 0:v:0', '-b:v:0 400k', '-filter:v:0 scale=480:trunc(ow/a/2)*2',
+          '-map 0:v:0', '-b:v:1 1000k', '-filter:v:1 scale=720:trunc(ow/a/2)*2',
+          '-map 0:v:0', '-b:v:2 2000k', '-filter:v:2 scale=1080:trunc(ow/a/2)*2',
         ])
-        // Audio (if present)
         .audioCodec('aac')
         .audioBitrate('96k')
         .audioChannels(2)
-        .addOutputOptions('-map 0:a:0?') // Optional audio mapping
-        // HLS settings
+        .addOutputOptions('-map 0:a:0') // Map audio once, not optional
         .format('hls')
         .addOutputOptions([
           `-hls_time ${segmentDuration}`,
           '-hls_list_size 0',
           `-hls_segment_filename ${outputDir}/%v_segment%d.ts`,
-          '-var_stream_map', 'v:0,a:0 v:1,a:0 v:2,a:0', // Split option and value
+          '-var_stream_map', 'v:0,a:0 v:1,a:0 v:2,a:0', // Reuse audio stream correctly
           `-master_pl_name master.m3u8`,
         ])
         .output(outputMaster);
   
       ffmpegProcess
-        .on('start', (commandLine) => {
-          console.log('Executing FFmpeg command:', commandLine);
-        })
+        .on('start', (commandLine) => console.log('Executing FFmpeg command:', commandLine))
+        .on('progress', (progress) => console.log('Processing progress:', progress.percent + '%'))
         .on('end', () => {
           console.log('FFmpeg processing complete');
           resolve();
         })
         .on('error', (err, stdout, stderr) => {
           console.error('FFmpeg error:', err.message);
+          console.error('FFmpeg stdout:', stdout);
           console.error('FFmpeg stderr:', stderr);
           reject(err);
         })
