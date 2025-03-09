@@ -178,18 +178,20 @@ async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
       exec(ffprobeCommand, (error, stdout) => {
         const hasAudio = !error && JSON.parse(stdout).streams.length > 0;
   
+        // Base command with video mappings
         let ffmpegCommand = `ffmpeg -i "${inputPath}" \
           -preset slow -g 48 -sc_threshold 0 \
-          -map 0:v:0 -map 0:v:0 -map 0:v:0`; // Map video stream for each variant
+          -map 0:v:0`; // Map video once
   
         if (hasAudio) {
-          ffmpegCommand += ` -map 0:a:0`; // Map audio stream once
+          ffmpegCommand += ` -map 0:a:0`; // Map audio once
         }
   
+        // Define three video variants
         ffmpegCommand += ` \
-          -b:v:0 400k -c:v:0 libx264 -filter:v:0 "scale=480:trunc(ow/a/2)*2" \
-          -b:v:1 1000k -c:v:1 libx264 -filter:v:1 "scale=720:trunc(ow/a/2)*2" \
-          -b:v:2 2000k -c:v:2 libx264 -filter:v:2 "scale=1080:trunc(ow/a/2)*2"`;
+          -c:v:0 libx264 -b:v:0 400k -filter:v:0 "scale=480:trunc(ow/a/2)*2" \
+          -c:v:1 libx264 -b:v:1 1000k -filter:v:1 "scale=720:trunc(ow/a/2)*2" \
+          -c:v:2 libx264 -b:v:2 2000k -filter:v:2 "scale=1080:trunc(ow/a/2)*2"`;
   
         if (hasAudio) {
           ffmpegCommand += ` \
