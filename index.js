@@ -44,37 +44,93 @@ async function getVideoDuration(inputPath) {
     });
   });
 }
+const ffmpeg = require('fluent-ffmpeg');
+const { exec } = require('child_process');
+const path = require('path');
+
+async function getVideoInfo(inputPath) {
+  return new Promise((resolve, reject) => {
+    exec(
+      `ffprobe -v error -show_entries stream=width,height -of json "${inputPath}"`,
+      (error, stdout, stderr) => {
+        if (error) {
+          console.error('ffprobe error:', stderr);
+          return reject(error);
+        }
+        const info = JSON.parse(stdout);
+        const videoStream = info.streams.find((s) => s.width && s.height);
+        resolve({
+          width: videoStream?.width || 0,
+          height: videoStream?.height || 0,
+        });
+      }
+    );
+  });
+}
+
 async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
-    const segmentDuration = duration < 300 ? 2 : 4;
-    const outputMaster = path.join(outputDir, 'master.m3u8');
-  
-    return new Promise((resolve, reject) => {
+  const segmentDuration = duration < 300 ? 2 : 4;
+  const outputMaster = path.join(outputDir, 'master.m3u8');
+
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get input resolution
+      const { width, height } = await getVideoInfo(inputPath);
+      console.log(`Input resolution: ${width}x${height}`);
+
+      // Define variant configurations based on input resolution
+      const variants = [];
+      if (height <= 360) {
+        variants.push({ bitrate: '400k', resolution: '480:trunc(ow/a/2)*2' }); // Downscale or maintain
+      } else if (height <= 720) {
+        variants.push({ bitrate: '400k', resolution: '480:trunc(ow/a/2)*2' });
+        variants.push({ bitrate: '1000k', resolution: `${Math.min(width, 1280)}:trunc(ow/a/2)*2` });
+      } else {
+        variants.push({ bitrate: '400k', resolution: '480:trunc(ow/a/2)*2' });
+        variants.push({ bitrate: '1000k', resolution: '720:trunc(ow/a/2)*2' });
+        variants.push({ bitrate: '2000k', resolution: `${Math.min(width, 1920)}:trunc(ow/a/2)*2` });
+      }
+
+      // Build FFmpeg command
       const ffmpegProcess = ffmpeg(inputPath)
         .outputOptions([
           '-preset slow',
           '-g 48',
           '-sc_threshold 0',
         ])
-        .videoCodec('libx264')
-        .addOutputOptions([
-          '-map 0:v:0', '-b:v:0 400k', '-filter:v:0 scale=480:trunc(ow/a/2)*2',
-          '-map 0:v:0', '-b:v:1 1000k', '-filter:v:1 scale=720:trunc(ow/a/2)*2',
-          '-map 0:v:0', '-b:v:2 2000k', '-filter:v:2 scale=1080:trunc(ow/a/2)*2',
-        ])
+        .videoCodec('libx264');
+
+      // Add video variants dynamically
+      variants.forEach((variant, index) => {
+        ffmpegProcess.addOutputOptions([
+          '-map 0:v:0',
+          `-b:v:${index} ${variant.bitrate}`,
+          `-filter:v:${index} scale=${variant.resolution}`,
+        ]);
+      });
+
+      // Audio configuration
+      ffmpegProcess
         .audioCodec('aac')
         .audioBitrate('96k')
         .audioChannels(2)
-        .addOutputOptions('-map 0:a:0') // Map audio once, not optional
+        .addOutputOptions('-map 0:a:0?'); // Optional audio mapping
+
+      // HLS configuration
+      const varStreamMap = variants
+        .map((_, index) => `v:${index}${variants.length > 1 ? ',a:0' : ''}`)
+        .join(' ');
+      ffmpegProcess
         .format('hls')
         .addOutputOptions([
           `-hls_time ${segmentDuration}`,
           '-hls_list_size 0',
           `-hls_segment_filename ${outputDir}/%v_segment%d.ts`,
-          '-var_stream_map', 'v:0,a:0 v:1,a:0 v:2,a:0', // Reuse audio stream correctly
+          '-var_stream_map', varStreamMap,
           `-master_pl_name master.m3u8`,
         ])
         .output(outputMaster);
-  
+
       ffmpegProcess
         .on('start', (commandLine) => console.log('Executing FFmpeg command:', commandLine))
         .on('progress', (progress) => console.log('Processing progress:', progress.percent + '%'))
@@ -89,8 +145,14 @@ async function processVideoWithFFmpeg(inputPath, outputDir, duration) {
           reject(err);
         })
         .run();
-    });
-  }
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+// Export for use in index.js
+module.exports = processVideoWithFFmpeg;
 
 async function uploadToMinIO(bucket, prefix, outputDir) {
   console.log('Uploading processed files to MinIO...');
